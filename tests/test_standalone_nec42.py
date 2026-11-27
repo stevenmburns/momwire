@@ -399,9 +399,9 @@ def test_the_ground_store_is_kept_and_moves_no_byte(deck, tmp_path):
 
 # --- momwire#1911: the one fill-reuse switch, MOMWIRE_X_PAIR_REUSE --------------
 #
-# Every executable accepts it (reach 11, `EXE_PARTS`): nec42-sinusoidal runs
-# the point-matched fill's plan (`_sin_pair_reuse_core.h`), nec42-bs2 bs2's
-# census and its part `offset_reuse` (momwire#2063), and each is held to the
+# Every executable accepts it (reach 11): nec42-sinusoidal runs the
+# point-matched fill's plan (`_sin_pair_reuse_core.h`), nec42-bs2 bs2's census
+# and its same-edge Toeplitz form (momwire#2063), and each is held to the
 # launcher with it on.
 _REUSE_ENV = "MOMWIRE_X_PAIR_REUSE"
 
@@ -443,7 +443,7 @@ def test_pair_reuse_answers_as_the_launcher(deck, tmp_path):
     plan built that did not decline; on nec42-sinusoidal MW_EXE_TIMES's
     last-fill line says so too); the fixtures, all below the small-deck
     thresholds or mixed, decline it, as Python's route does (on nec42-bs2
-    the part `offset_reuse` still runs on their long edges)."""
+    the same-edge Toeplitz form still runs on their long edges)."""
     if isinstance(deck, str):
         path = tmp_path / f"{deck.replace(':', '_')}.nec"
         path.write_text(_reuse_curtain(deck.split(":")[1]), encoding="latin-1")

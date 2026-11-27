@@ -45,7 +45,7 @@ CLEAN = 1e-10
 
 #: 28 MHz.
 LAM = 10.7
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "sinusoidal").drift
 #: The fill's own bound, max |dZ| / max |Z|, as the 1970 gates'.
 MATRIX = 3e-12
 GROUNDS = {

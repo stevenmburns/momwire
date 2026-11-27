@@ -1014,10 +1014,12 @@ def _reuse_ran(built: int, declined: int) -> bool:
     return built - declined >= 1
 
 
-# The two spellings nec5-razor2p takes: the one fill-reuse switch, which it
-# maps to its part (`EXE_PARTS`), and the part's own older variable. Each
-# names itself on line 2, as Python's stamp does.
+# The two spellings nec5-razor2p takes: the one fill-reuse switch, and its
+# deprecated razor2p spelling (`REUSE_ALIASES`, momwire#2063 step 4), which
+# reads as the switch with a note on stderr. Line 2 names the switch either
+# way, as Python's stamp does.
 _REUSE_VARS_1971 = ("MOMWIRE_X_PAIR_REUSE", "MOMWIRE_X_RAZOR_PAIR_REUSE")
+_DEPRECATED_NOTE = "{} is deprecated; use MOMWIRE_X_PAIR_REUSE (momwire#2063)"
 
 
 def _no_reuse_vars(monkeypatch):
@@ -1031,15 +1033,15 @@ def _no_reuse_vars(monkeypatch):
 def test_razor_pair_reuse_runs_as_the_launcher(ground, var, tmp_path, monkeypatch):
     """Reach 8 covers the nec5 executables (levels 6 to 8). On ("1") and
     off ("0"), by either spelling, the executable's printout is the
-    launcher's byte for byte, line 2 naming the variable's feature on both
-    sides only when it is on. The executable and the launcher share the
+    launcher's byte for byte, line 2 naming `pair_reuse` on both sides only
+    when it is on. The executable and the launcher share the
     C++ core, so that alone cannot catch a fault in the core: the reuse is
     also shown to RUN (MW_EXE_TIMES's reuse line: a plan built that did not
     decline when on, none built when off) and on is held to off byte for
     byte except line 2 (the reuse moves Zin ~1e-13 here, far under a
     printed digit)."""
     _no_reuse_vars(monkeypatch)
-    stamp = b" +" + var.removeprefix("MOMWIRE_X_").lower().encode()
+    stamp = b" +pair_reuse"
     name = f"reuse_{ground}.nec"
 
     def prepare(d):
@@ -1057,6 +1059,8 @@ def test_razor_pair_reuse_runs_as_the_launcher(ground, var, tmp_path, monkeypatc
         )
         assert exe.returncode == 0, exe.stderr
         _same(exe, ref, de, dl)
+        note = _DEPRECATED_NOTE.format(var).encode()
+        assert (note in exe.stderr) == (var != "MOMWIRE_X_PAIR_REUSE"), exe.stderr
         built, declined, found = _reuse_counts(exe.stderr)
         if state == "1":
             assert _reuse_ran(built, declined), (built, declined, found)
@@ -1069,18 +1073,23 @@ def test_razor_pair_reuse_runs_as_the_launcher(ground, var, tmp_path, monkeypatc
     assert on[:1] + on[2:] == off[:1] + off[2:]
 
 
+# MOMWIRE_X_PAIR_REUSE set beside a deprecated spelling: the switch wins, set
+# either way, and the deprecated variable is not read (no note).
+_PRECEDENCE = [
+    ({"MOMWIRE_X_PAIR_REUSE": "1"}, "0", True),
+    ({"MOMWIRE_X_PAIR_REUSE": "1"}, "1", True),
+    ({"MOMWIRE_X_PAIR_REUSE": "0"}, "1", False),
+]
+
+
 @pytest.mark.skipif(BASIS != "razor2p", reason="razor2p's feature")
-@pytest.mark.parametrize(
-    ("part", "stamp", "runs"),
-    [("0", b"", False), ("1", b" +pair_reuse+razor_pair_reuse", True)],
-)
-def test_the_part_variable_decides_under_the_whole(
-    part, stamp, runs, tmp_path, monkeypatch
+@pytest.mark.parametrize(("whole", "old", "runs"), _PRECEDENCE)
+def test_the_switch_wins_over_the_deprecated_variable(
+    whole, old, runs, tmp_path, monkeypatch
 ):
-    """MOMWIRE_X_PAIR_REUSE=1 with the part's own variable set: the part's
-    value wins (`_features.enabled`'s order). At 0 nothing reuses and line 2
-    names neither, as Python's stamp names a whole only where it runs; at 1
-    both are named, in registry order. The launcher's bytes either way."""
+    """MOMWIRE_X_PAIR_REUSE set with MOMWIRE_X_RAZOR_PAIR_REUSE: the switch's
+    value decides (`_features.enabled`'s order), line 2 names `pair_reuse`
+    only where it is on, and the launcher's bytes either way."""
     _no_reuse_vars(monkeypatch)
     name = "reuse_free.nec"
 
@@ -1091,30 +1100,23 @@ def test_the_part_variable_decides_under_the_whole(
         [name, "reuse.out"],
         tmp_path,
         prepare=prepare,
-        env={
-            "MOMWIRE_X_PAIR_REUSE": "1",
-            "MOMWIRE_X_RAZOR_PAIR_REUSE": part,
-            "MW_EXE_TIMES": "1",
-        },
+        env={**whole, "MOMWIRE_X_RAZOR_PAIR_REUSE": old, "MW_EXE_TIMES": "1"},
     )
     assert exe.returncode == 0, exe.stderr
     _same(exe, ref, de, dl)
+    assert b"is deprecated" not in exe.stderr, exe.stderr
     built, declined, _found = _reuse_counts(exe.stderr)
     assert _reuse_ran(built, declined) == runs, (built, declined)
-    line2 = (de / "reuse.out").read_bytes().split(b"\n")[1]
-    line2 = line2.rstrip()
-    assert line2.endswith(stamp) if stamp else b"+" not in line2, line2
+    line2 = (de / "reuse.out").read_bytes().split(b"\n")[1].rstrip()
+    assert line2.endswith(b" +pair_reuse") if runs else b"+" not in line2, line2
 
 
 # nec5-bs2's two spellings: the one fill-reuse switch, which turns on the
-# census (`_bspline_pair_reuse_core.h`, the whole's own slot) and bs2's part
-# `offset_reuse` (`EXE_PARTS`), and both at once by their own variables.
+# census (`_bspline_pair_reuse_core.h`) and the same-edge Toeplitz form, and
+# its deprecated bs2 spelling (`REUSE_ALIASES`, momwire#2063 step 4).
 _BS2_REUSE_ENVS = {
     "whole": ({"MOMWIRE_X_PAIR_REUSE": "1"}, b" +pair_reuse"),
-    "both": (
-        {"MOMWIRE_X_PAIR_REUSE": "1", "MOMWIRE_X_OFFSET_REUSE": "1"},
-        b" +pair_reuse+offset_reuse",
-    ),
+    "deprecated": ({"MOMWIRE_X_OFFSET_REUSE": "1"}, b" +pair_reuse"),
 }
 
 
@@ -1162,8 +1164,8 @@ def _coeffs(arrays: Path) -> bytes:
 @pytest.mark.parametrize("spelling", sorted(_BS2_REUSE_ENVS))
 @pytest.mark.parametrize("ground", sorted(_BS2_REUSE_DECKS))
 def test_bs2_pair_reuse_runs_as_the_launcher(ground, spelling, tmp_path, monkeypatch):
-    """bs2's C++ fill runs the census and `offset_reuse` (momwire#2063), as
-    the Python route does. On, the executable's printout is the launcher's
+    """bs2's C++ fill runs the census and the same-edge Toeplitz form
+    (momwire#2063), as the Python route does. On, the executable's printout is the launcher's
     byte for byte, line 2 naming what is on; the census RAN (a plan built
     that did not decline); and on is held to off byte for byte except line
     2. Off (unset), no plan is built."""
@@ -1292,7 +1294,7 @@ def test_bs2_image_reuse_is_the_launchers_at_full_precision(
             )
         (i_source,) = np.fromfile(arrays / "0_i_source.bin", dtype=np.complex128)
         z[state] = 1.0 / complex(i_source)
-    drift = _features.FEATURES["pair_reuse"].drift
+    drift = _features.family("pair_reuse", "bspline").drift
     assert z["on"] != z["off"]
     assert abs(z["on"] - z["off"]) / abs(z["off"]) <= drift
     z_py = 1.0 / _python_i_source(text, monkeypatch, True)
@@ -1300,25 +1302,19 @@ def test_bs2_image_reuse_is_the_launchers_at_full_precision(
 
 
 @pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")
-def test_bs2_reuse_runs_both_its_parts(tmp_path, monkeypatch):
-    """The adversarial case for `test_bs2_pair_reuse_runs_as_the_launcher`:
-    the printout bytes cannot tell a part that ran from one withheld (both
-    move Z far under a printed digit), so the solved coefficients
-    (MW_EXE_ARRAYS) are compared bit for bit. The census alone
-    (MOMWIRE_X_OFFSET_REUSE=0 under the whole) and the part alone each give
-    coefficients of their own, so an executable that withheld either would
-    print it as off. Both at once is the census's bits: since momwire#2063
-    step 3 the part (the regularised moments' Toeplitz form) is inert where
-    the census serves the direct fill, its class values the dense
-    routine's."""
+def test_bs2_deprecated_variable_is_the_switch_to_the_bit(tmp_path, monkeypatch):
+    """The solved coefficients (MW_EXE_ARRAYS), bit for bit: the deprecated
+    MOMWIRE_X_OFFSET_REUSE alone, and the switch with it set off beside it,
+    each solve as MOMWIRE_X_PAIR_REUSE alone, which is not the off solve.
+    The census ran in each; off builds no plan."""
     _no_bs2_reuse_vars(monkeypatch)
     deck = tmp_path / "reuse_free.nec"
     deck.write_text(_REUSE_DECKS_1971["free"], newline="")
     runs = {
         "off": {},
-        "census": {"MOMWIRE_X_PAIR_REUSE": "1", "MOMWIRE_X_OFFSET_REUSE": "0"},
-        "part": {"MOMWIRE_X_OFFSET_REUSE": "1"},
-        "both": {"MOMWIRE_X_PAIR_REUSE": "1"},
+        "whole": {"MOMWIRE_X_PAIR_REUSE": "1"},
+        "deprecated": {"MOMWIRE_X_OFFSET_REUSE": "1"},
+        "whole_old_off": {"MOMWIRE_X_PAIR_REUSE": "1", "MOMWIRE_X_OFFSET_REUSE": "0"},
     }
     coeffs, counts = {}, {}
     for label, extra in runs.items():
@@ -1333,31 +1329,26 @@ def test_bs2_reuse_runs_both_its_parts(tmp_path, monkeypatch):
             check=False,
         )
         assert r.returncode == 0, r.stderr
+        note = _DEPRECATED_NOTE.format("MOMWIRE_X_OFFSET_REUSE").encode()
+        assert (note in r.stderr) == (label == "deprecated"), (label, r.stderr)
         coeffs[label] = _coeffs(arrays)
         assert coeffs[label], label
         counts[label] = _reuse_counts(r.stderr)
-    assert len({coeffs[k] for k in ("off", "census", "part")}) == 3, (
-        "a part did not run"
-    )
-    assert coeffs["both"] == coeffs["census"], "the part moved the census's fill"
-    for label in ("census", "both"):
+    assert coeffs["deprecated"] == coeffs["whole"] == coeffs["whole_old_off"]
+    assert coeffs["off"] != coeffs["whole"]
+    for label in ("whole", "deprecated", "whole_old_off"):
         assert _reuse_ran(*counts[label][:2]), (label, counts[label])
-    for label in ("off", "part"):
-        assert counts[label][0] == 0, (label, counts[label])
+    assert counts["off"][0] == 0, counts["off"]
 
 
 @pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's reuse")
-@pytest.mark.parametrize(
-    ("part", "stamp", "census"),
-    [("0", b"", True), ("1", b" +pair_reuse+offset_reuse", True)],
-)
-def test_bs2_the_part_variable_decides_under_the_whole(
-    part, stamp, census, tmp_path, monkeypatch
+@pytest.mark.parametrize(("whole", "old", "runs"), _PRECEDENCE)
+def test_bs2_the_switch_wins_over_the_deprecated_variable(
+    whole, old, runs, tmp_path, monkeypatch
 ):
-    """MOMWIRE_X_PAIR_REUSE=1 with MOMWIRE_X_OFFSET_REUSE set: the part's
-    value decides the part, and line 2 names the whole only where its part
-    runs (`_features.stamp`); the census follows the whole either way, as
-    `BSplineSolver._reuse_on` does. The launcher's bytes either way."""
+    """MOMWIRE_X_PAIR_REUSE set with MOMWIRE_X_OFFSET_REUSE: the switch's
+    value decides, census and Toeplitz form together, and line 2 names
+    `pair_reuse` only where it is on. The launcher's bytes either way."""
     _no_bs2_reuse_vars(monkeypatch)
     name = "reuse_free.nec"
 
@@ -1368,18 +1359,15 @@ def test_bs2_the_part_variable_decides_under_the_whole(
         [name, "reuse.out"],
         tmp_path,
         prepare=prepare,
-        env={
-            "MOMWIRE_X_PAIR_REUSE": "1",
-            "MOMWIRE_X_OFFSET_REUSE": part,
-            "MW_EXE_TIMES": "1",
-        },
+        env={**whole, "MOMWIRE_X_OFFSET_REUSE": old, "MW_EXE_TIMES": "1"},
     )
     assert exe.returncode == 0, exe.stderr
     _same(exe, ref, de, dl)
+    assert b"is deprecated" not in exe.stderr, exe.stderr
     built, declined, _found = _reuse_counts(exe.stderr)
-    assert _reuse_ran(built, declined) == census, (built, declined)
+    assert _reuse_ran(built, declined) == runs, (built, declined)
     line2 = (de / "reuse.out").read_bytes().split(b"\n")[1].rstrip()
-    assert line2.endswith(stamp) if stamp else b"+" not in line2, line2
+    assert line2.endswith(b" +pair_reuse") if runs else b"+" not in line2, line2
 
 
 # Eight wires of random place and direction over Sommerfeld ground (the
@@ -1453,11 +1441,10 @@ def test_razor_pair_reuse_unset_or_off_moves_no_byte(deck, tmp_path, monkeypatch
 
 @pytest.mark.skipif(BASIS != "bs2", reason="nec5-bs2's refusal")
 def test_nec5_bspline_refuses_razor_pair_reuse_by_basis(tmp_path, monkeypatch):
-    """nec5-bs2 shares nec5-razor2p's support levels (6 and 7) and its
-    feature table, so the reach alone would let it accept
-    MOMWIRE_X_RAZOR_PAIR_REUSE, name it on line 2 and fill as with it off.
-    The feature is razor2p's fill, so this executable refuses it, in the
-    registry's sentence, before reading the deck, and writes nothing."""
+    """MOMWIRE_X_RAZOR_PAIR_REUSE is razor2p's deprecated spelling of the
+    switch (`REUSE_ALIASES`), so on nec5-bs2 it is a name this executable
+    does not carry: refused, in the registry's sentence, before reading the
+    deck, as before momwire#2063 step 4, and nothing is written."""
     from momwire import _features
 
     monkeypatch.delenv("MOMWIRE_X_RAZOR_PAIR_REUSE", raising=False)

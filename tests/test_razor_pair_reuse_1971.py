@@ -61,10 +61,10 @@ pytestmark = [
 # them, as test_point_cplx_staged_1849 does. The off and refusal tests run
 # everywhere.
 _needs_cert = pytest.mark.skipif(
-    not _features.certified("razor_pair_reuse"),
-    reason="razor_pair_reuse is not certified on this platform",
+    not _features.certified("pair_reuse", solver="razor"),
+    reason="razor2p's pair reuse is not certified on this platform",
 )
-DRIFT = _features.FEATURES["razor_pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "razor").drift
 # The decks here are well conditioned: on against off moves them ~1e-13, so
 # they hold the reuse to this, tighter than the registry's drift (which the
 # close-spaced decks set, `_features`). A wrong key moves them by orders more.

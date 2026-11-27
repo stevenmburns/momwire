@@ -139,7 +139,6 @@ def test_the_pragma_features_are_the_ones_that_cannot_change_the_answer():
         assert f.drift <= F.DEFAULT_DRIFT_MAX, name
         assert not f.default, name
         assert f.kind == "python", name
-        assert f.part_of is None, name
         assert F.pragma_eligible(name)
     for name, f in F.FEATURES.items():
         if not f.pragma:
@@ -185,9 +184,9 @@ def test_a_pragma_reads_as_the_variable_set_on(no_features):
         assert F.enabled("pair_reuse")
         assert "pair_reuse" in F.active()
         assert F.stamp(solver="razor") == "+pair_reuse"
-        # a part reads the whole's, as under the variable
-        assert F.enabled("razor_pair_reuse")
-        assert F.enabled("offset_reuse")
+        # every family's, as under the variable
+        assert F.enabled("pair_reuse", solver="razor")
+        assert F.enabled("pair_reuse", solver="bspline")
     assert F._env_value(PAIR) is None
     assert not F.enabled("pair_reuse")
     assert F.stamp(solver="razor") == ""
@@ -210,12 +209,13 @@ def test_the_variable_on_is_as_today(no_features):
         assert F.enabled("pair_reuse") and F.pragma_note() == ""
 
 
-def test_a_part_turned_off_still_decides_under_the_pragma(no_features):
+def test_a_deprecated_variable_off_still_decides_under_the_pragma(no_features):
     no_features.setenv("MOMWIRE_X_RAZOR_PAIR_REUSE", "0")
     with F.pragma_scope(DECK):
-        assert F.enabled("pair_reuse")
-        assert not F.enabled("razor_pair_reuse")
+        assert F.enabled("pair_reuse", solver="bspline")
+        assert not F.enabled("pair_reuse", solver="razor")
         assert F.stamp(solver="razor") == ""
+        assert F.stamp(solver="bspline") == "+pair_reuse"
 
 
 def test_the_keyword_still_wins(no_features):

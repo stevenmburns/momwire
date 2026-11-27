@@ -26,6 +26,8 @@ from momwire.razor import RazorSolver
 from momwire.sinusoidal import SinusoidalSolver
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
+from _reuse_seam import bs2
+
 acc = _accel.acc
 pytestmark = pytest.mark.skipif(acc is None, reason="needs the C++ accelerator")
 
@@ -120,7 +122,7 @@ def reconciles(reuse):
 @pytest.mark.parametrize(
     "make",
     [
-        lambda: BSplineSolver(**yagi()),
+        lambda: bs2(**yagi()),
         lambda: razor(),
         lambda: SinusoidalSolver(**yagi()),
         lambda: SinusoidalGalerkinSolver(**yagi()),
@@ -139,7 +141,7 @@ def test_before_a_solve_it_is_empty_and_serialisable(make):
 @pytest.mark.parametrize(
     "make, route",
     [
-        (lambda: BSplineSolver(**yagi()), "dense"),
+        (lambda: bs2(**yagi()), "dense"),
         (lambda: razor(), "dense"),
         (lambda: SinusoidalSolver(**yagi()), "dense"),
         (lambda: SinusoidalGalerkinSolver(**yagi()), "dense"),
@@ -158,7 +160,7 @@ def test_stage_times_are_read_on_every_solve(make, route):
 
 
 def test_the_factor_clock_belongs_to_the_solver_that_filled():
-    a, b = BSplineSolver(**yagi(n_el=4)), BSplineSolver(**yagi(n_el=4))
+    a, b = bs2(**yagi(n_el=4)), bs2(**yagi(n_el=4))
     a.compute_impedance()
     before = a.fill_report()["times"]["factor_s"]
     b.compute_impedance()
@@ -186,7 +188,7 @@ def test_sweep_times_are_totals_and_the_rest_is_the_last_fill():
 
 
 def test_a_batched_sweep_counts_its_frequencies():
-    s = BSplineSolver(**yagi(n_el=4))
+    s = bs2(**yagi(n_el=4))
     k = 2 * math.pi / LAM
     s.compute_impedance_swept(np.linspace(0.98, 1.02, 5) * k)
     report = s.fill_report()
@@ -216,7 +218,7 @@ def test_no_census_without_the_option(monkeypatch):
         "bspline_reuse_plan",
         lambda *a, **k: calls.append("bs2") or real_bs2(*a, **k),
     )
-    for s in (razor(), SinusoidalSolver(**yagi()), BSplineSolver(**yagi())):
+    for s in (razor(), SinusoidalSolver(**yagi()), bs2(**yagi())):
         s.compute_impedance()
         assert s.fill_report()["reuse"] is None
     assert calls == []
@@ -227,7 +229,7 @@ def test_no_symmetry_probe_without_the_option(monkeypatch):
         raise AssertionError("the sector map ran with the option off")
 
     monkeypatch.setattr("momwire._rotational_symmetry.sector_map", probe, raising=True)
-    for s in (BSplineSolver(**radial_screen()), SinusoidalSolver(**radial_screen())):
+    for s in (bs2(**radial_screen()), SinusoidalSolver(**radial_screen())):
         s.compute_impedance()
         assert s.fill_report()["sector"] is None
 
@@ -276,7 +278,7 @@ def test_sinusoidal_counts_reconcile(ground, names):
 
 def test_bspline_counts_reconcile_on_the_tensor_route():
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, pair_reuse=True, toeplitz=False)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "tensor"
@@ -291,7 +293,7 @@ def test_bspline_counts_reconcile_on_the_tensor_route():
 
 def test_bspline_counts_reconcile_on_the_chunked_route():
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=True, swept_mem_mb=1)
+    s = bs2(**deck, pair_reuse=True, swept_mem_mb=1)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
@@ -300,11 +302,11 @@ def test_bspline_counts_reconcile_on_the_chunked_route():
     reconciles(reuse)
 
 
-def test_bspline_offset_reuse_alone_has_no_reuse_to_report():
-    """`offset_reuse` alone copies no pair (momwire#2063 step 3: what is left
-    of it is the regularised moments' Toeplitz form inside the same-edge
-    kernel), so the fill report has no reuse to speak of."""
-    s = BSplineSolver(**yagi(), offset_reuse=True)
+def test_bspline_toeplitz_form_alone_has_no_reuse_to_report():
+    """The same-edge Toeplitz form held on without the census (`_reuse_seam`)
+    copies no pair (momwire#2063 step 3), so the fill report has no reuse to
+    speak of."""
+    s = bs2(**yagi(), toeplitz=True)
     s.compute_impedance()
     assert s.pair_reuse_served is None
     assert s.fill_report()["reuse"] is None
@@ -313,7 +315,7 @@ def test_bspline_offset_reuse_alone_has_no_reuse_to_report():
 def test_the_families_on_bspline_count_the_ground_image():
     # momwire#2068: the image is its own family (it used to be uncounted).
     deck = yagi(height=6.0)
-    s = BSplineSolver(**deck, pair_reuse=True, ground_z=0.0)
+    s = bs2(**deck, pair_reuse=True, ground_z=0.0)
     s.compute_impedance()
     reuse = s.fill_report()["reuse"]
     assert reuse["uncounted"] == []
@@ -349,7 +351,7 @@ def test_a_later_unserved_fill_does_not_read_as_served():
     served. (The batched sweep was this test's unserved fill until a sweep
     with a served plan left it, momwire#2172.)"""
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, pair_reuse=True, toeplitz=False)
     s.compute_impedance()
     assert s.fill_report()["reuse"]["state"] == "served"
     geom = s._build_geometry()
@@ -362,7 +364,7 @@ def test_a_later_unserved_fill_does_not_read_as_served():
 
 def test_a_sweep_with_a_served_plan_reads_as_served():
     deck = yagi()
-    s = BSplineSolver(**deck, pair_reuse=True, offset_reuse=False)
+    s = bs2(**deck, pair_reuse=True, toeplitz=False)
     s.compute_impedance_swept(np.array([0.99, 1.01]) * 2 * math.pi / LAM)
     assert s.fill_report()["reuse"]["state"] == "served"
 
@@ -512,7 +514,7 @@ def test_bspline_computed_pairs_match_a_spy_on_the_moment_fill(monkeypatch):
     monkeypatch.setattr(
         BSplineSolver, "_dense_tensor_fits_budget", lambda self, n: False
     )
-    s = BSplineSolver(**deck, pair_reuse=True)
+    s = bs2(**deck, pair_reuse=True)
     s.compute_impedance()
     served = s.pair_reuse_served
     assert served["route"] == "chunked"
@@ -539,7 +541,7 @@ def solved(make):
     [
         lambda: razor(pair_reuse=True),
         lambda: SinusoidalSolver(**yagi(), pair_reuse=True),
-        lambda: BSplineSolver(**yagi(), pair_reuse=True),
+        lambda: bs2(**yagi(), pair_reuse=True),
     ],
     ids=["razor", "sinusoidal", "bs2"],
 )
@@ -583,7 +585,7 @@ def test_the_sector_route_reports_the_map(cls):
 
 def test_the_sector_route_lists_every_harmonic_it_factored():
     deck = radial_screen(n_radials=4)
-    s = BSplineSolver(**deck, rotational_symmetry=True)
+    s = bs2(**deck, rotational_symmetry=True)
     s.compute_port_solution()
     blocks = s.fill_report()["sector"]["blocks"]
     assert len(blocks) >= 1 and blocks[0] == max(blocks)
@@ -602,7 +604,7 @@ def test_pair_reuse_on_the_sector_route_says_why_it_steps_aside():
 def test_a_refused_deck_reports_the_refusal_sentence():
     deck = yagi(n_el=3)
     with pytest.raises(RotationalSymmetryRefused) as caught:
-        BSplineSolver(**deck, rotational_symmetry=True)
+        bs2(**deck, rotational_symmetry=True)
     report = momwire.refused_fill_report(caught.value)
     json.dumps(report)
     assert report["sector"]["declined"] == str(caught.value)
@@ -611,7 +613,7 @@ def test_a_refused_deck_reports_the_refusal_sentence():
 
 
 def test_the_factor_sink_follows_the_last_filler():
-    s = BSplineSolver(**yagi(n_el=3))
+    s = bs2(**yagi(n_el=3))
     s.compute_impedance()
     ledger = s._fill_ledger
     before = ledger.factor_s

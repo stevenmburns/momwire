@@ -36,7 +36,7 @@ pytestmark = pytest.mark.reach(4)
 CLEAN = 1e-10
 
 LAM = 21.1
-DRIFT = _features.FEATURES["pair_reuse"].drift
+DRIFT = _features.family("pair_reuse", "sinusoidal").drift
 # The fill's own bound, max |dZ| / max |Z| (the registry's `drift` is the
 # feed impedance's, which the solve amplifies): measured 4.3e-13 at worst
 # over the 11-16 ground ladder, ~1e-14 on these decks.
