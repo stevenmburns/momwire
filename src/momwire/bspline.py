@@ -5670,10 +5670,14 @@ class BSplineSolver(
         segment: its ladder and EK labels."""
         if self.ground_z is None or self._has_buried_wires():
             return None
-        if not _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL or not hasattr(
-            _acc, "assemble_Z_bspline_weighted_windowed"
+        # The chunked image fill's own gate (`_compute_Z_operator_filled`):
+        # past it the image is the tensor route's, which reads no plan.
+        if not (
+            _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL
+            and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and self._accel_serves_n_qp_pair
         ):
-            return "no C++ weighted assembler"
+            return "the image fill is not the chunked one"
         seg_l, seg_r = geom["seg_l"], geom["seg_r"]
         if self._image_fill_ladder(self.k, seg_l, seg_r, ek) != ladder:
             return "the image fill's pair-order ladder is not the direct fill's"

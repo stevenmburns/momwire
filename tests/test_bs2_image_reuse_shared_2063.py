@@ -188,6 +188,31 @@ def test_the_image_route_ran_and_agrees_with_reuse_off(layout, ground):
     assert abs(a - b) / abs(b) <= DRIFT
 
 
+def test_a_tensor_image_fill_plans_no_image():
+    """Past the chunked image fill's degree (`_BSPLINE_ASSEMBLE_ACCEL_MAX_D`)
+    the image is the tensor route's, which reads no plan: none is built for
+    it, and the report says why."""
+    s = BSplineSolver(**row(), **PEC, pair_reuse=True, offset_reuse=False, degree=3)
+    (_r, fills, _c) = ran(s.compute_impedance)
+    assert fills == 0
+    assert not s._reuse_plan(s._build_geometry()).image
+    assert s._reuse_image_declined == "the image fill is not the chunked one"
+
+
+@pytest.mark.parametrize("degree", [1])
+def test_the_weighted_tiles_switch_on_the_degree(degree):
+    """The weighted tiled assembler's degree switch, run off d = 2 (d = 3
+    reaches it only through the binding: no image fill serves d = 3)."""
+    deck = row()
+    (_s, z_on), fills, calls = ran(
+        lambda: z_of(deck, PEC, pair_reuse=True, offset_reuse=False, degree=degree)
+    )
+    assert fills == 1 and calls >= 1
+    _s, z_off = z_of(deck, PEC, pair_reuse=False, degree=degree)
+    assert not np.array_equal(z_on, z_off)
+    assert rel(z_on, z_off) <= 1e-10
+
+
 @pytest.mark.parametrize("ground", sorted(GROUNDS))
 def test_a_vertical_stack_shares_image_classes_between_edges(ground):
     """The old branch's negative test, inverted. Pairs (i, M(j)) and

@@ -54,8 +54,9 @@ pytestmark = pytest.mark.skipif(
 # follow-up, the swept extended kernel's tiered entry; -1 there too, the
 # H-matrix EK block entries (flat, refl, and both tiered) sharing one switch;
 # +1 at momwire#2166, the tiled windowed assembler (pair_reuse's direct
-# family), which reaches 3 as the windowed one does.
-N_DEGREE_SWITCHES = 26
+# family), which reaches 3 as the windowed one does; +1 at momwire#2063 step
+# 2a, its weighted twin (the image block), which reaches 3 too.
+N_DEGREE_SWITCHES = 27
 
 
 def _source() -> str:
