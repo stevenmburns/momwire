@@ -1123,6 +1123,13 @@ _BS2_REUSE_ENVS = {
 # Sommerfeld deck is two 101-segment dipoles (202) where razor2p's is 122.
 _BS2_REUSE_DECKS = {
     "free": _REUSE_DECKS_1971["free"],
+    # Past the tensor's 256 MB (9 x 16 x N^2 B, N > 1365): the chunked fill,
+    # whose direct windows assemble from the class values (momwire#2166).
+    "free_chunked": (
+        "CM momwire#2063: two parallel dipoles, free space, 1402 segments\nCE\n"
+        "GW 1 701 0 -5 10 0 5 10 0.001\nGW 2 701 3 -5 10 3 5 10 0.001\nGE 0\n"
+        "EX 0 1 351 0 1 0\nFR 0 1 0 0 14.0 0\nXQ\nEN\n"
+    ),
     "pec": _REUSE_DECKS_1971["pec"],
     "sommerfeld": (
         "CM momwire#2063: two parallel dipoles over Sommerfeld ground, 202 segments\n"
@@ -1179,12 +1186,20 @@ def test_bs2_pair_reuse_runs_as_the_launcher(ground, spelling, tmp_path, monkeyp
         windows = _BS2_WINDOWS.search(exe.stderr.decode("latin-1"))
         if state == "on":
             assert _reuse_ran(built, declined), (built, declined, found)
-            # momwire#2166: the chunked fill assembled its windows from the
-            # class values (the fused route), not from a gathered window.
-            assert windows and int(windows[1]) + int(windows[2]) >= 1, exe.stderr
-            # momwire#2063 step 2a: over a ground the image block too.
-            if ground != "free":
-                assert windows[3] is not None, exe.stderr
+            direct = int(windows[1]) + int(windows[2]) if windows else 0
+            if ground == "free_chunked":
+                # momwire#2166: the chunked fill assembled its windows from
+                # the class values (the fused route), not from a gathered
+                # window.
+                assert direct >= 1, exe.stderr
+            else:
+                # Under the tensor's budget the direct block is gathered from
+                # the class values (no window); since momwire#2063 step 3 no
+                # offset edge sends such a deck to the chunked fill.
+                assert direct == 0, exe.stderr
+            # momwire#2063 step 2a: over a ground the image block's windows.
+            if not ground.startswith("free"):
+                assert windows and windows[3] is not None, exe.stderr
                 assert int(windows[3]) + int(windows[4]) >= 1, exe.stderr
         else:
             assert built == 0 and found == 0, (built, declined, found)
@@ -1290,9 +1305,12 @@ def test_bs2_reuse_runs_both_its_parts(tmp_path, monkeypatch):
     the printout bytes cannot tell a part that ran from one withheld (both
     move Z far under a printed digit), so the solved coefficients
     (MW_EXE_ARRAYS) are compared bit for bit. The census alone
-    (MOMWIRE_X_OFFSET_REUSE=0 under the whole), the part alone, and both
-    each give coefficients of their own: an executable that withheld either
-    one would print two of the three alike."""
+    (MOMWIRE_X_OFFSET_REUSE=0 under the whole) and the part alone each give
+    coefficients of their own, so an executable that withheld either would
+    print it as off. Both at once is the census's bits: since momwire#2063
+    step 3 the part (the regularised moments' Toeplitz form) is inert where
+    the census serves the direct fill, its class values the dense
+    routine's."""
     _no_bs2_reuse_vars(monkeypatch)
     deck = tmp_path / "reuse_free.nec"
     deck.write_text(_REUSE_DECKS_1971["free"], newline="")
@@ -1318,7 +1336,10 @@ def test_bs2_reuse_runs_both_its_parts(tmp_path, monkeypatch):
         coeffs[label] = _coeffs(arrays)
         assert coeffs[label], label
         counts[label] = _reuse_counts(r.stderr)
-    assert len(set(coeffs.values())) == len(coeffs), "a part did not run"
+    assert len({coeffs[k] for k in ("off", "census", "part")}) == 3, (
+        "a part did not run"
+    )
+    assert coeffs["both"] == coeffs["census"], "the part moved the census's fill"
     for label in ("census", "both"):
         assert _reuse_ran(*counts[label][:2]), (label, counts[label])
     for label in ("off", "part"):
