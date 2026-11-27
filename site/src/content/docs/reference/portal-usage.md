@@ -461,7 +461,7 @@ standalone executable, and each turns on its own engine's reuse. It is
   among them (one class per segment offset), and over a ground its image
   term and Sommerfeld remainder too. On any deck it also fills a uniform
   wire's own regularised moments once per segment offset. It moves Z by at
-  most about 5e-10 relative.
+  most about 2e-9 relative.
 
 `MOMWIRE_X_PAIR_REUSE=0` turns all of it off. Two older names are
 deprecated. They still work in 0.99.0, each for its own engine only, and are

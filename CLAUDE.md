@@ -128,8 +128,10 @@ retirement writes the `RETIRED` registry shape, both described below.
   `MOMWIRE_RAZOR_CXX`, makes one exit 2 with a sentence before it reads a
   deck; set to "0" it is accepted. A deck's `CM momwire:` card for a feature
   it does not run is not refused: line 2 names it as ignored (momwire#2155).
-- `pair_reuse` is one switch, and each executable maps it to its own route's
-  part (`EXE_PARTS` in the same file). Line 2 names the whole only.
+- `pair_reuse` is one switch, and each executable runs its own route's
+  reuse under it. The deprecated per-family spellings map onto it through
+  `REUSE_ALIASES` in the same file, removed in 0.100.0. Line 2 names the
+  whole only.
 - A CERTIFICATION build (CMake `MW_EXE_CERTIFY=<name>`, `EXE_CERTIFYING` in
   the same file, momwire#1911) also runs a carried feature past its reach, so
   the exe's own bytes can be gated against Python's before the reach is
