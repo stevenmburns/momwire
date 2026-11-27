@@ -11027,8 +11027,9 @@ class BSplineSolver(
         chunk sizing counts E's columns against `swept_mem_mb`.
 
         Agreement with the per-k `port_sites`: bit for bit on the per-k loop
-        routes (singular enrichment, and the finite-ground / exact-kernel
-        fallback, whose hoisted same-edge moments are the per-k fill's); to
+        routes (singular enrichment, and the finite-ground / exact-kernel /
+        served-plan fallback, whose hoisted same-edge moments are the per-k
+        fill's); to
         rounding on the batched route, whose assembly and stacked LU
         reassociate against the per-k fill and `lu_factor`
         (`tests/test_port_sites_swept_1923.py` holds both).
@@ -11167,7 +11168,8 @@ class BSplineSolver(
           enrichment sweep stays byte-for-byte what it was;
         * the fully batched fast path (batched assembly + one k- and
           port-batched KCL Schur solve per chunk) when
-          `_swept_batched_available`. This is the one route whose per-k core
+          `_swept_batched_available` and no `pair_reuse` plan is served
+          (`_swept_reads_plan`, momwire#2172). This is the one route whose per-k core
           is NOT `compute_port_solution` — thinning it would dissolve the
           chunking that bounds `swept_mem_mb` — so it re-spells only the
           readout, `Y = Bᵀ X`, off the shared `_port_columns`;
@@ -11570,9 +11572,10 @@ class BSplineSolver(
 
         Fully batched fast path (batched C++ J/Z assembly + stacked
         LAPACK solve, junctions via the batched KCL Schur) when
-        `_swept_batched_available`; otherwise a per-k loop that rebinds
+        `_swept_batched_available` and no `pair_reuse` plan is served
+        (`_swept_reads_plan`); otherwise a per-k loop that rebinds
         self.k / self.omega / self.wavelength per call and restores them
-        (enrichment and finite grounds live here).
+        (enrichment, finite grounds and a served plan live here).
 
         Both routes read their drive/readout algebra off
         `_feed_drive_and_readout`, the same helper `compute_impedance` uses,
