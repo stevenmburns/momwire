@@ -5,7 +5,7 @@ solver reuses: bs2's census and its same-edge Toeplitz form (what was
 `offset_reuse`), razor2p's fill-pair reuse (what was `razor_pair_reuse`), the
 sinusoidal class map. False turns all of it off. The old names are deprecated
 spellings of the switch on their own family (`FamilyReach.alias`), read and
-warned for two minor releases:
+warned in 0.99.0 and removed in 0.100.0:
 
 - the precedence: `pair_reuse` given (keyword or variable) wins; a
   deprecated keyword beats a variable, as any keyword does; a deprecated
@@ -285,3 +285,29 @@ def test_razor_pair_reuse_answers_as_pair_reuse_to_the_bit(no_features):
         a = _razor(razor_pair_reuse=True).compute_port_solution().y
         b = _razor(pair_reuse=True).compute_port_solution().y
     assert np.array_equal(_bits(a), _bits(b))
+
+
+def test_the_aliases_go_in_their_removal_release():
+    """The deprecated spellings are removed in ALIAS_REMOVED_IN (Steve,
+    2026-11-27: one minor after ALIAS_DEPRECATED_IN). A version bump to it
+    with the aliases still in the registry fails here."""
+    import tomllib
+    from pathlib import Path
+
+    def v(s):
+        return tuple(int(p) for p in s.split(".")[:3])
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    if not pyproject.exists():
+        pytest.skip("no source tree")
+    version = tomllib.loads(pyproject.read_text())["project"]["version"]
+    aliases = [
+        fam.alias for f in F.FEATURES.values() for fam in f.families if fam.alias
+    ]
+    assert v(F.ALIAS_REMOVED_IN) == (
+        v(F.ALIAS_DEPRECATED_IN)[0],
+        v(F.ALIAS_DEPRECATED_IN)[1] + 1,
+        0,
+    )
+    if v(version) >= v(F.ALIAS_REMOVED_IN):
+        assert not aliases, f"remove {aliases} in {F.ALIAS_REMOVED_IN}"

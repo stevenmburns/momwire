@@ -464,8 +464,8 @@ standalone executable, and each turns on its own engine's reuse. It is
   most about 5e-10 relative.
 
 `MOMWIRE_X_PAIR_REUSE=0` turns all of it off. Two older names are
-deprecated. They still work, each for its own engine only, until two minor
-releases after 0.99.0:
+deprecated. They still work in 0.99.0, each for its own engine only, and are
+removed in 0.100.0:
 
 - `MOMWIRE_X_RAZOR_PAIR_REUSE` for `razor2p`;
 - `MOMWIRE_X_OFFSET_REUSE` for `bs2`.

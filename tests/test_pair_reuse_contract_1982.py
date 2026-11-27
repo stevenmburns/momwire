@@ -80,7 +80,7 @@ def test_every_reusing_solver_takes_the_one_keyword():
     # antennaknobs probes this keyword on the constructor (`_takes_pair_reuse`).
     for cls in (BSplineSolver, SinusoidalSolver, RazorSolver):
         assert "pair_reuse" in inspect.signature(cls.__init__).parameters, cls
-    # The deprecated spellings are still taken, for two minor releases.
+    # The deprecated spellings are still taken until 0.100.0.
     assert "offset_reuse" in inspect.signature(BSplineSolver.__init__).parameters
     assert "razor_pair_reuse" in inspect.signature(RazorSolver.__init__).parameters
 
