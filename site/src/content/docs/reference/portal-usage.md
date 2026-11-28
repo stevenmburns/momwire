@@ -477,8 +477,10 @@ wins.
 Every one of these is far below the printed digits. It pays where one
 geometry is solved many times; if it is slower on your deck, turn it off.
 
-The NEC-4.2 and NEC-5 printouts name it on line 2 (`+pair_reuse`) wherever
-it runs.
+The NEC-4.2 and NEC-5 printouts name it on line 2 (`+pair_reuse`) whenever
+the switch reaches the engine. It says reuse was tried, not that the deck had
+repeats to reuse: a deck reuse cannot serve runs the ordinary fill under the
+same line.
 The NEC-2 printout keeps nec2c's layout and does not name it.
 
 ### Rotational symmetry for radial screens
@@ -509,8 +511,11 @@ ignores the variable. It is certified for the drop-ins on Linux and Windows;
 on macOS it runs the same code, not yet certified there. The NEC-2 drop-in's
 printout keeps nec2c's layout and does not name it; the NEC-4.2 and NEC-5
 drop-ins name it on printout line 2 (`+rotational_symmetry`, followed by
-`uncertified on this platform` on macOS). The standalone executables refuse
-it.
+`uncertified on this platform` on macOS) whenever the switch reaches an engine
+that takes it. As with `+pair_reuse`, it says the route was tried, not that
+the deck qualified; a deck that does not is solved densely under the same
+line, and `MOMWIRE_ADVISORIES=deck` names the reason. The standalone
+executables refuse it.
 
 ### Turning a feature on in the deck
 
@@ -537,8 +542,9 @@ digit: `pair_reuse` and `rotational_symmetry`. The rules:
   deck.
 - **A name it does not take is ignored**, and line 2 of the NEC-5, NEC-4.2
   and NEC-2D printouts says so: `(pragma ignored: <name>)` (the NEC-2
-  printout has no line 2). Where the feature
-  runs, line 2 names it as the variable would (`+pair_reuse`).
+  printout has no line 2). A name it takes appears on line 2 as the
+  variable's would (`+pair_reuse`): the feature was tried, whether or not the
+  deck is one it serves.
 
 In EZNEC, type the line into the model's description: EZNEC copies the
 description into the deck as `CM` cards, one card per line of text. Put the
