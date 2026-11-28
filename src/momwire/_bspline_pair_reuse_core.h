@@ -198,9 +198,41 @@ struct Geometry {
 // moments of it (momwire#631), so each pair is its own class and its value
 // its own fill's bits.
 enum ImageMode : int8_t { Keyed = 0, OwnPairs = 2 };
+//
+// A LEVEL EDGE's own image pairs (momwire#2180) key on the edge instead, as
+// the direct block's same-edge pairs do (step 3): under the general key a
+// long uniform wire's pairs of one offset split by their lengths' last bits
+// (the 3.5-wavelength long wire's 2,507 segments take 9 length patterns,
+// spread 2^-41, past LENGTH_BITS), 132,831 classes for its 2,507 offsets.
+// An edge is level when its every segment is keyed, its length is within
+// 2^-40 of the edge's h (`edge_h`), and its end points' heights differ from
+// the first segment's by at most 2^-44 of the edge's image distance 2H (the
+// first segment's centre to its mirror's), 2H > 0. To that rounding the image pair
+// (o, M(s)) of such an edge is a pair of parallel segments of length h,
+// offset (s - o) h along the edge and 2H across it: the key is the
+// IMAGE EDGE MARK (the routine bit with w[0]'s bit 0, which neither other
+// form sets), the EK eligibility, the radius and tube types, the edge's h
+// exactly by type, the integer offset |s - o| with one reciprocity code bit,
+// and 2H by `length_type`. The near and tie rules are the general key's,
+// pair by pair. A class's value is the off-edge kernel's at its
+// representative, the image fill's own moments of that pair.
+//
+// WHAT IT ACCEPTS: the members of a class are not bit-equal. The kernel
+// forms each pair's lengths and nodes from its own end points, so pairs of
+// one offset differ by their coordinates' rounding (on the long wire the
+// moments of 400 pairs of one offset spread 5-7e-13 of |J|, 44 distinct
+// values among pairs whose lengths are bit-equal); the general key already
+// shares within its quanta (2^-40 of D^2, 2^-44 of h). A member takes its
+// representative's value, an error of that rounding times the moments'
+// bounded slope, as the direct same-edge key's arcs do; measured on the gate
+// decks it stays inside bs2's registered drift (`_features.py`).
+//
 // TEST HOOK (the adversarial gate): 1 keys block 1 on the source's UNMIRRORED
-// direction (the image's z-flip dropped from the key only), which no correct
-// plan does. Plans are keyed on it.
+// direction (the image's z-flip dropped from the key only), 2 drops 2H from
+// the image edge key (level edges at different heights then share a
+// class), 3 takes a sloped edge as level, all of which no correct plan
+// does; 4 keeps every image pair on the general key (0.99.0's plan). Plans
+// are keyed on it.
 void set_image_key_probe(int probe);
 // TEST HOOK (the adversarial gate, momwire#2063 step 3): 1 keys same-edge
 // pairs with the general key, near and tie rules included, and without the
@@ -229,6 +261,9 @@ std::shared_ptr<const Plan> plan_of_classes(const int32_t *cls, int64_t n);
 int64_t same_edge_pairs(const Plan &p);
 int64_t same_edge_classes(const Plan &p);
 int64_t near_pairs(const Plan &p);
+// The image block's pairs on level edges, the image edge key's (each
+// keyed so unless the near or tie rule leaves it its own class).
+int64_t image_edge_pairs(const Plan &p);
 
 // The moment window of observer rows r0..r1 against every source:
 // out[((p * d1 + q) * (r1 - r0) + i) * n + s] = values[c * d1 * d1 + p * d1 + q]

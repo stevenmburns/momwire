@@ -43,9 +43,21 @@ constexpr uint64_t ROUTINE_BIT = uint64_t(1) << 63;
 
 constexpr int W = 6;  // key words
 
-// Per row, the [lo, hi) columns of its near same-edge singles.
+// The image edge key's marker: the routine bit with w[0]'s bit 0, where the
+// direct same-edge key leaves bits 0..11 clear and the general key never
+// sets bit 63.
+constexpr uint64_t IMAGE_EDGE_MARK = ROUTINE_BIT | 1;
+// A level edge's tolerances, relative: each segment's length to the edge's h
+// (`edge_h`), and each end point's height to the edge's first, of the edge's
+// distance to its image.
+constexpr int LEVEL_LENGTH_BITS = 40;
+constexpr int LEVEL_HEIGHT_BITS = 44;
+
+// Per row, the [lo, hi) columns of its near same-edge singles; and the image
+// edge key's pairs (`image_edge_pairs`).
 struct Bands {
     std::vector<int64_t> lo, hi;
+    int64_t image_edge_pairs = 0;
 };
 
 bool bit(const std::vector<uint64_t> &b, int64_t c) {
@@ -136,6 +148,48 @@ void build(const Geometry &g, Plan &plan_ref) {
     const std::vector<double> &thr = g.thresholds;
     const bool routine_probe = g_routine_probe.load() == 1;
     const double same_near = g_same_edge_near.load();
+    const int img_probe = image ? g_image_key_probe.load() : 0;
+
+    // THE IMAGE EDGE KEY's edges (the header's "A LEVEL EDGE"): every
+    // segment keyed (not grazing), its length within 2^-LEVEL_LENGTH_BITS of
+    // the edge's h, its end points' heights within 2^-LEVEL_HEIGHT_BITS of
+    // the edge's image distance from the first segment's, and that distance
+    // positive. Per segment, whether its edge is one, and the edge's image
+    // distance's type.
+    std::vector<uint8_t> level(static_cast<size_t>(n), 0);
+    std::vector<uint64_t> sep_id(static_cast<size_t>(n), 0);
+    int64_t level_pairs = 0;
+    if (image && img_probe != 4) {
+        Ids sep_ids;
+        for (int64_t e0 = 0; e0 < n;) {
+            int64_t e1 = e0;
+            while (e1 < n && g.edge[e1] == g.edge[e0]) e1++;
+            const size_t f0 = static_cast<size_t>(e0) + static_cast<size_t>(n);
+            const double sep = mid[3 * static_cast<size_t>(e0) + 2] - mid[3 * f0 + 2];
+            const double z0 = g.seg_l[3 * e0 + 2], zi0 = g.img_l[3 * e0 + 2];
+            const double he = g.edge_h[e0];
+            bool ok = sep > 0.0 && std::isfinite(sep) && he > 0.0;
+            const double tz = std::ldexp(sep, -LEVEL_HEIGHT_BITS), th = std::ldexp(he, -LEVEL_LENGTH_BITS);
+            for (int64_t i = e0; ok && i < e1; i++) {
+                ok = g.img_mode[i] == Keyed && g.edge_h[i] == he &&
+                     std::fabs(len[static_cast<size_t>(i)] - he) <= th;
+                // TEST HOOK 3: a sloped edge keys as a level one.
+                if (ok && img_probe != 3)
+                    ok = std::fabs(g.seg_l[3 * i + 2] - z0) <= tz && std::fabs(g.seg_r[3 * i + 2] - z0) <= tz &&
+                         std::fabs(g.img_l[3 * i + 2] - zi0) <= tz && std::fabs(g.img_r[3 * i + 2] - zi0) <= tz;
+            }
+            if (ok) {
+                const std::pair<uint64_t, uint64_t> st = length_type(sep);
+                const uint64_t id = static_cast<uint64_t>(sep_ids.id(st.first, st.second));
+                for (int64_t i = e0; i < e1; i++) {
+                    level[static_cast<size_t>(i)] = 1;
+                    sep_id[static_cast<size_t>(i)] = id;
+                }
+                level_pairs += (e1 - e0) * (e1 - e0);
+            }
+            e0 = e1;
+        }
+    }
 
     auto key = [&](int blk, int64_t o, int64_t s, uint64_t *w, uint8_t &code) -> Key {
         code = 0;
@@ -176,6 +230,28 @@ void build(const Geometry &g, Plan &plan_ref) {
         const double ratio = dm / hmax;
         for (double t : thr)
             if (std::fabs(ratio - t) <= TIE_REL * t) return own;
+        const bool elig = ek && g.group_i[o] >= 0 && g.group_i[o] == g.group_j[s];
+        const uint64_t bt = elig && g.b_src ? b_id[static_cast<size_t>(s)] : 0;
+        if (blk && same && level[static_cast<size_t>(o)] && level[static_cast<size_t>(s)]) {
+            // THE IMAGE EDGE KEY: (o, M(s)) on a level edge is, to its
+            // members' rounding, the edge's h, the offset s - o, the edge's
+            // distance to its image and the types; the marker keeps it from
+            // every other form. TEST HOOK 2 drops the distance.
+            const int64_t k = s - o;
+            w[0] = IMAGE_EDGE_MARK | (uint64_t(elig) << 12) | (a_id[static_cast<size_t>(o)] << 13) | (bt << 38);
+            w[1] = eh_id[static_cast<size_t>(o)];
+            w[3] = img_probe == 2 ? 0 : sep_id[static_cast<size_t>(o)];
+            // RECIPROCITY, as the general key's: (s, M(o)) is the mirror
+            // image of (M(s), o), the transpose of (o, M(s)), when the two
+            // rows' radii, tubes and eligibility agree.
+            const bool sym_e = (!elig || !g.b_src || b_id[static_cast<size_t>(o)] == b_id[static_cast<size_t>(s)]) &&
+                               elig == (ek && g.group_i[s] >= 0 && g.group_i[s] == g.group_j[o]);
+            w[2] = static_cast<uint64_t>(sym_e && k < 0 ? -k : k);
+            w[4] = sym_e ? 0 : 1;
+            w[5] = 0;
+            code = sym_e && k < 0 ? 1 : 0;
+            return Key::Shared;
+        }
         const double D = std::max(dm - 0.5 * (hi + hj), g.a[o]);
         const double D2 = D * D;
         if (!(D2 > 0.0) || !std::isfinite(D2)) return own;
@@ -187,8 +263,6 @@ void build(const Geometry &g, Plan &plan_ref) {
         const double AB = A[0] * B[0] + A[1] * B[1] + A[2] * B[2];
         if (!qword(mm, inv, w[2]) || !qword(mA, inv, w[3]) || !qword(mB, inv, w[4]) || !qword(AB, inv, w[5]))
             return own;
-        const bool elig = ek && g.group_i[o] >= 0 && g.group_i[o] == g.group_j[s];
-        const uint64_t bt = elig && g.b_src ? b_id[static_cast<size_t>(s)] : 0;
         w[0] = static_cast<uint64_t>(e + 2200) | (uint64_t(elig) << 12) | (a_id[static_cast<size_t>(o)] << 13) |
                (bt << 38);
         w[1] = h_id[static_cast<size_t>(o)] | (h_id[si] << 32);
@@ -257,6 +331,7 @@ void build(const Geometry &g, Plan &plan_ref) {
         }
         e0 = e1;
     }
+    bands->image_edge_pairs = level_pairs;
     plan->ext_bytes = 16 * static_cast<size_t>(n);
     plan->ext = bands;
     plan->budget_bytes = pair_reuse::held_bytes(*plan);
@@ -390,6 +465,11 @@ int64_t same_edge_classes(const Plan &p) { return p.fam.empty() ? 0 : static_cas
 bool has_image(const Plan &p) { return !p.fam.empty() && p.fam[0].spec.n_blocks == 2 && !p.fam[0].map[1].empty(); }
 
 int64_t near_pairs(const Plan &p) { return p.fam.empty() ? 0 : p.fam[0].near; }
+
+int64_t image_edge_pairs(const Plan &p) {
+    const Bands *b = static_cast<const Bands *>(p.ext.get());
+    return b ? b->image_edge_pairs : 0;
+}
 
 bool near_same_edge(const Plan &p, int32_t c) { return !p.fam.empty() && near_apart(p.fam[0], c); }
 

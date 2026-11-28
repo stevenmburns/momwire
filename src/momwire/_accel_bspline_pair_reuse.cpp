@@ -367,6 +367,7 @@ py::dict stats(const PlanHandle &h) {
     out["near_pairs"] = br::near_pairs(p);
     out["same_edge_pairs"] = br::same_edge_pairs(p);
     out["same_edge_classes"] = br::same_edge_classes(p);
+    out["image_edge_pairs"] = br::image_edge_pairs(p);
     out["rep_evals"] = f.rep_evals;
     out["groups"] = static_cast<int64_t>(f.groups.size());
     // Per block, by the block of each class's representative (momwire#2063
@@ -508,8 +509,9 @@ void register_bspline_pair_reuse(py::module_ &m) {
     m.def("bspline_reuse_set_same_edge_near_lengths", &br::set_same_edge_near_lengths, py::arg("lengths"),
           "TEST HOOK (momwire#2063 step 3): the same-edge near rule's lengths for later plans; < 0 restores.");
     m.def("bspline_reuse_set_image_key_probe", &br::set_image_key_probe, py::arg("probe"),
-          "TEST HOOK (momwire#2063 step 2a): 1 keys the image block on the source's unmirrored "
-          "direction; 0 restores.");
+          "TEST HOOK (momwire#2063 step 2a, #2180): 1 keys the image block on the source's unmirrored "
+          "direction, 2 drops the image distance from the level-edge key, 3 takes sloped edges as "
+          "level, 4 keys no level edge (0.99.0's plan); 0 restores.");
     m.def("bspline_reuse_class_limit", &br::set_class_limit, py::arg("classes"),
           "TEST HOOK: later plans decline past this many classes (0: the coding's own limit).");
     m.def("bspline_reuse_plan_allowance", &br::set_plan_allowance, py::arg("bytes"),
