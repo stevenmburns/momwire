@@ -289,7 +289,10 @@ FEATURES: dict[str, Feature] = {
         # classes of (observer segment, source segment) pairs on the common
         # core (`_bspline_pair_reuse_core.h`) and evaluates each class's
         # moments once with the shipped off-edge kernel; its same-edge pairs
-        # are keyed apart, each class the same-edge routine's (step 3); its
+        # are keyed apart, each class the same-edge routine's (step 3); a
+        # level edge's own image pairs key on the edge's h, the offset and
+        # the height (momwire#2180), the general key's quanta being finer
+        # than a long wire's lengths' rounding; its
         # Sommerfeld remainder has a plan of its own (step 2b), its segment
         # pairs keyed by the plane's invariants, each class evaluated once by
         # the fused remainder kernel; a front end's edge-pair hint (PRs #1810,
@@ -354,6 +357,7 @@ FEATURES: dict[str, Feature] = {
                 "tests/test_pair_reuse_chunked_2020.py",
                 "tests/test_bs2_fused_assembly_2166.py",
                 "tests/test_bs2_image_reuse_shared_2063.py",
+                "tests/test_bs2_image_edge_key_2180.py",
                 "tests/test_bs2_remainder_plane_reuse_2063.py",
                 "tests/test_sin_pair_reuse_fold_census.py",
                 "tests/test_sin_pair_reuse_cxx_1911.py",
@@ -395,6 +399,12 @@ FEATURES: dict[str, Feature] = {
                 # its fan dipole flat and drooped, free and Sommerfeld;
                 # 4.5e-12, 3.3e-12 and 2.3e-13 on the 10-element Yagi,
                 # 3.5-wavelength long wire and 32-radial vertical decks.
+                # With the level-edge image key (momwire#2180), over
+                # Sommerfeld: 1.6e-11 on antennaknobs' long wire (N 180,
+                # 2,507 segments; 1.4e-12 under the general key), 9.2e-12
+                # and 9.5e-14 on its uniform-cores Yagi at 180 and 120,
+                # 2.7e-12 on the Yagi at 120 with its own cores, 5.7e-12 on
+                # its 16-radial vertical, 1.7e-12 on the fan dipole flat.
                 # Outside 5e-10, the bound every other deck holds: the #1971
                 # hairpin (cond(Z) ~7e9, its bridge's pairs all near singles
                 # at their own bits) moves 1.5e-9 over refl-coef, 1.0e-9 over
